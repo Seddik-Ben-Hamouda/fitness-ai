@@ -7,6 +7,7 @@ __pycache__/
 venv/
 venv-pose/
 .env
+/emqxsl-ca.crt
 
 # IDE
 .vscode/
@@ -22,8 +23,9 @@ Thumbs.db
 *.h5
 *.keras
 
-# Generated datasets
-dataset/**/*.npy
+# Local datasets, downloaded archives, and generated model reports
+/dataset/
+/models/
 
 # Logs
 *.log

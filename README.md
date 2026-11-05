@@ -1,460 +1,150 @@
 # Fitness AI
 
-AI-powered fitness application that uses real-time human pose estimation and machine learning to recognize exercises, count repetitions, and analyze exercise form.
-
-The project is designed as a complete AI + mobile + backend + IoT system. The AI pipeline is developed in Python and will later be integrated into a React Native mobile application.
-
----
-
-## Project Objective
-
-The objective is to develop a fitness application capable of understanding physical exercises through a camera.
-
-The planned system will:
-
-* Detect the user's body position in real time.
-* Extract human body landmarks.
-* Recognize exercises such as push-ups and squats.
-* Count repetitions automatically.
-* Evaluate exercise execution and form.
-* Track physical activity such as steps.
-* Connect the AI system to a mobile application.
-* Use MQTT for future IoT communication.
-* Provide a progression/level system inspired by fitness games.
-
-Example:
-
-```text
-User performs 20 push-ups
-        ↓
-Camera
-        ↓
-YOLO26-Pose
-        ↓
-Body landmarks
-        ↓
-Our exercise recognition model
-        ↓
-Push-up detected
-        ↓
-Repetition counter
-        ↓
-20 repetitions completed
-        ↓
-Level progression
-```
-
----
-
-# Current AI Architecture
-
-The AI system is divided into several stages:
-
-```text
-Camera / Video
-       ↓
-YOLO26-Pose
-       ↓
-Human Body Keypoints
-       ↓
-Data Preprocessing
-       ↓
-Temporal Sequence
-       ↓
-Our Exercise Classification Model
-       ↓
-Exercise Recognition
-       ↓
-Repetition Counting
-       ↓
-Form Analysis
-```
-
-The pose estimation model and the exercise recognition model have different responsibilities.
-
-### Pose estimation
-
-A pretrained YOLO26-Pose model detects human body keypoints.
-
-### Exercise recognition
-
-Our own machine learning model will learn to recognize exercises from sequences of these keypoints.
-
-This separation allows the project to use a strong pretrained pose detector while training a specialized model specifically for fitness exercises.
-
----
-
-# YOLO26-Pose
-
-The project currently uses **YOLO26-Pose** from Ultralytics.
-
-YOLO is a family of real-time computer vision models.
-
-The pose version is designed to detect human body keypoints instead of only detecting objects.
-
-For a person, the model provides approximately 17 body keypoints, including:
-
-* Nose
-* Eyes
-* Ears
-* Shoulders
-* Elbows
-* Wrists
-* Hips
-* Knees
-* Ankles
-
-These points provide the information required by the next stage of the AI pipeline.
-
-We are **not training YOLO26-Pose from scratch**.
-
-Instead, we integrate the pretrained pose model and use its output as input for our own exercise-recognition model.
-
-The YOLO model therefore acts as the visual perception component of the system.
-
----
-
-# Why Pose Landmarks?
-
-Using raw camera images directly for exercise recognition would require a much larger and more complex model.
-
-Instead, the system first converts the image into body coordinates.
-
-For example:
-
-```text
-Camera image
-     ↓
-Person detected
-     ↓
-17 body keypoints
-     ↓
-(x, y) coordinates
-     ↓
-34 numerical values
-```
-
-For every frame:
-
-```text
-17 keypoints × 2 coordinates = 34 values
-```
-
-These values can then be used to train a machine learning model.
-
----
-
-# Technology Stack
-
-## AI
-
-* Python 3.10
-* PyTorch
-* Ultralytics YOLO26-Pose
-* NumPy
-* OpenCV
-* scikit-learn
-* TensorFlow/Keras for future experiments if required
-
-## Backend
-
-Planned:
-
-* Node.js
-* Express.js
-* MySQL
-* REST APIs
-
-## Mobile
-
-Planned:
-
-* React Native
-* Expo
-
-## IoT
-
-Planned:
-
-* MQTT
-* Sensors / IoT devices
-* MQTT broker
-
----
-
-# Development Environment
-
-Current development environment:
-
-```text
-Operating System:
-Windows 10
-
-Python:
-3.10.11
-
-GPU:
-NVIDIA GeForce RTX 4050 Laptop GPU
-
-GPU VRAM:
-6 GB
-
-CUDA:
-12.8
-
-PyTorch:
-2.11.0+cu128
-
-Ultralytics:
-8.4.171
-```
-
-The AI development is currently performed locally using the NVIDIA GPU.
-
----
-
-# Project Structure
-
-Current structure:
-
-```text
-fitness-ai/
-│
-├── README.md
-├── .gitignore
-├── requirements-pose.txt
-│
-├── scripts/
-│   ├── pose_test.py
-│   ├── yolo_pose_test.py
-│   └── collect_data.py
-│
-├── dataset/
-│   ├── pushup/
-│   └── squat/
-│
-└── models/
-```
-
-The `dataset` and `models` directories will contain generated training data and trained models during later development.
-
-Large generated files are excluded from GitHub using `.gitignore`.
-
----
-
-# Installation
-
-## 1. Clone the repository
-
-```bash
-git clone https://github.com/Seddik-Ben-Hamouda/fitness-ai.git
-cd fitness-ai
-```
-
----
-
-## 2. Create the Python environment
-
-The pose/YOLO environment uses Python 3.10.
-
-On Windows:
+A local Python prototype that uses YOLO pose estimation to count squat and
+push-up repetitions from a webcam or saved video. The longer-term app flow is
+for the user to choose an exercise; the current prototypes are for testing the
+computer-vision counters.
+
+## Current status
+
+- The squat counter tracks knee angle; the push-up counter tracks elbow angle.
+- A repetition is counted after the movement reaches its lower-angle threshold
+  and returns to its standing/top threshold.
+- Both counters display the detected pose, angle, count, and basic feedback.
+- These are range-of-motion experiments, not complete form or safety checks.
+- An experimental LSTM classifier was also trained to distinguish squat from
+  push-up. It is separate from the counters and is not required to run them.
+
+## Setup
+
+Use Python 3.10 and the `venv-pose` environment on Windows:
 
 ```powershell
 py -3.10 -m venv venv-pose
-```
-
-Activate it:
-
-```powershell
 venv-pose\Scripts\activate
-```
-
-If using the Thonny Python installation:
-
-```powershell
-"C:\Program Files (x86)\Thonny\python.exe" -m venv venv-pose
-```
-
-Then:
-
-```powershell
-venv-pose\Scripts\activate
-```
-
----
-
-# Install AI Dependencies
-
-Upgrade pip:
-
-```powershell
 python -m pip install --upgrade pip
-```
-
-Install the required packages:
-
-```powershell
 pip install -r requirements-pose.txt
 ```
 
----
-
-# PyTorch CUDA Installation
-
-The project uses the CUDA-enabled PyTorch build so that inference can run on the NVIDIA GPU.
-
-If the standard requirements installation installs a CPU version of PyTorch, install the CUDA build with:
+The project runs on CPU or CUDA. If PyTorch was installed without CUDA support,
+install the CUDA-enabled PyTorch build appropriate for your system using the
+official PyTorch instructions. Check the installation with:
 
 ```powershell
-pip uninstall torch torchvision -y
+python -c "import torch; print(torch.__version__); print('CUDA available:', torch.cuda.is_available())"
 ```
 
-Then:
+The first YOLO run needs the `yolo26m-pose.pt` model weights in the project
+folder. Keep these weights local; they are excluded from Git.
+
+## Run the counters
+
+Start the squat counter with your webcam:
 
 ```powershell
-pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
+venv-pose\Scripts\python.exe scripts\squat_counter.py --source camera
 ```
 
-Verify CUDA:
+Start the push-up counter with your webcam:
 
 ```powershell
-python -c "import torch; print('PyTorch:', torch.__version__); print('CUDA available:', torch.cuda.is_available()); print('CUDA:', torch.version.cuda); print('GPU:', torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'CPU')"
+venv-pose\Scripts\python.exe scripts\pushup_counter.py --source camera
 ```
 
-Expected result:
-
-```text
-PyTorch: 2.11.0+cu128
-CUDA available: True
-CUDA: 12.8
-GPU: NVIDIA GeForce RTX 4050 Laptop GPU
-```
-
----
-
-# Test YOLO Pose Detection
-
-Run:
+For either counter, replace `camera` with a video path to process a saved video:
 
 ```powershell
-python scripts\yolo_pose_test.py
+venv-pose\Scripts\python.exe scripts\squat_counter.py --source "C:\path\to\squat.mp4"
+venv-pose\Scripts\python.exe scripts\pushup_counter.py --source "C:\path\to\pushup.mp4"
 ```
 
-The first execution may automatically download the YOLO26-Pose model weights.
+The video is displayed with the pose overlay, movement angle, status, and
+repetition count. The final count remains visible for five seconds after the
+video ends. Press **Q** in the video window or terminal, **Esc** in the window,
+or **Ctrl+C** in the terminal to stop. For best results, use a side view and
+keep the relevant body joints visible.
 
-The webcam should open and display the detected human body keypoints.
+### Publish repetitions to EMQX Cloud
 
-Press:
+Both counters can optionally publish each completed repetition to an EMQX
+Serverless broker over TLS. MQTT is disabled unless `--mqtt` is supplied.
 
-```text
-Q
-```
-
-to close the application.
-
----
-
-# Dataset Collection
-
-The next stage is to create our own exercise dataset.
-
-The project currently supports:
-
-```text
-pushup
-squat
-```
-
-Run:
+1. Install the added MQTT dependencies with `pip install -r requirements-pose.txt`.
+2. Copy `.env.example` to `.env` in the project root and fill in the broker
+   address, MQTT username, and MQTT password from EMQX. Do not use the EMQX API
+   key here.
+3. Download the deployment CA certificate and save it as `emqxsl-ca.crt` in
+   the project root, or set `MQTT_CA_CERT` in `.env` to its path.
+4. Run either counter with `--mqtt`:
 
 ```powershell
-python scripts\collect_data.py
+venv-pose\Scripts\python.exe scripts\squat_counter.py --source camera --mqtt
+venv-pose\Scripts\python.exe scripts\pushup_counter.py --source camera --mqtt
 ```
 
-The program asks:
+Each completed repetition publishes a JSON message to `fitness/squat/reps` or
+`fitness/push-up/reps`. Use an MQTT client such as MQTTX to subscribe to that
+topic and capture the received messages. The `.env` file and downloaded CA
+certificate are excluded from Git.
+
+### Adjusting thresholds
+
+The default squat thresholds are 110 degrees at the bottom and 155 degrees
+standing. The default push-up thresholds are 100 degrees at the bottom and
+155 degrees at the top. For example, to allow a squat to count when the detected
+knee angle returns to 140 degrees:
+
+```powershell
+venv-pose\Scripts\python.exe scripts\squat_counter.py --source "C:\path\to\squat.mp4" --standing-angle 140
+```
+
+Push-up thresholds can be changed with `--bottom-angle` and `--top-angle`;
+squat thresholds use `--bottom-angle` and `--standing-angle`. Adjustments can
+change which movements count, so compare the displayed count with the actual
+repetitions.
+
+## Dataset and classifier experiments
+
+The downloaded videos are expected under `dataset/push-up/` and `dataset/squat/`.
+Extract fixed-length YOLO pose sequences with:
+
+```powershell
+venv-pose\Scripts\python.exe scripts\extract_video_poses.py
+```
+
+This saves 30-frame, 17-keypoint sequences under `dataset/pose_sequences/`.
+Train the experimental exercise classifier with:
+
+```powershell
+venv-pose\Scripts\python.exe scripts\train_exercise_classifier.py
+```
+
+Test that classifier visually on a video or webcam with:
+
+```powershell
+venv-pose\Scripts\python.exe scripts\test_exercise_classifier.py --source "C:\path\to\exercise.mp4"
+venv-pose\Scripts\python.exe scripts\test_exercise_classifier.py --source camera
+```
+
+The classifier predicts the exercise type; it does not decide whether form is
+correct and is not used by the squat or push-up counters. Its dataset and test
+set are small, so treat its scores as experimental.
+
+## Project files
 
 ```text
-Enter exercise (pushup/squat):
+scripts/
+  extract_video_poses.py          Convert labelled videos to pose sequences
+  pushup_counter.py               Count push-up repetitions
+  squat_counter.py                Count squat repetitions
+  train_exercise_classifier.py    Train the experimental LSTM/GRU classifier
+  test_exercise_classifier.py     Visually test the classifier
+  yolo_pose_test.py               Preview YOLO pose detection from a webcam
+  collect_data.py                 Collect pose sequences from a webcam
+  pose_test.py                    Older MediaPipe pose demo
+requirements-pose.txt             Python package requirements
 ```
 
-Enter:
-
-```text
-pushup
-```
-
-or:
-
-```text
-squat
-```
-
-The webcam then captures body landmarks.
-
-Each frame contains:
-
-```text
-17 keypoints × 2 coordinates = 34 values
-```
-
-The coordinates are normalized relative to the image dimensions.
-
-A sequence contains:
-
-```text
-30 frames
-```
-
-Therefore each training sample has approximately:
-
-```text
-30 frames × 34 values
-```
-
-When the sequence is complete, press:
-
-```text
-S
-```
-
-to save it.
-
-Press:
-
-```text
-Q
-```
-
-to quit.
-
----
-
-# Dataset Structure
-
-Training samples will be organized as:
-
-```text
-dataset/
-│
-├── pushup/
-│   ├── pushup_0.npy
-│   ├── pushup_1.npy
-│   ├── pushup_2.npy
-│   └── ...
-│
-└── squat/
-    ├── squat_0.npy
-    ├── squat_1.npy
-    ├── squat_2.npy
-    └── ...
-```
-
-Each `.npy` file represents one temporal sequence.
-
----
-
-# Exercise Recognition Model
-
-After collecting enough data, the next AI stage is to train our own model.
-
-The planne
+Downloaded datasets, generated sequences, model reports, environments, and
+model weights are local files and are excluded from Git by `.gitignore`. Check
+the dataset's license on its source page before redistributing it.
