@@ -1,3 +1,5 @@
+"""Show the experimental exercise classifier's prediction on video or webcam."""
+
 import argparse
 from pathlib import Path
 import sys
@@ -7,6 +9,7 @@ import numpy as np
 import torch
 from ultralytics import YOLO
 
+# Windows terminal input needs msvcrt; other platforms use the window controls.
 if sys.platform == "win32":
     import msvcrt
 else:
@@ -23,6 +26,7 @@ VIDEO_SUFFIXES = {".mp4", ".mov", ".avi", ".mkv"}
 
 
 def parse_args() -> argparse.Namespace:
+    """Read input source, saved model paths, and preview options."""
     parser = argparse.ArgumentParser(
         description="Visually test the exercise classifier on a video or webcam."
     )
@@ -61,6 +65,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def resolve_device(requested: str) -> tuple[str, torch.device]:
+    """Choose CPU/GPU and report when CUDA was requested but is unavailable."""
     device_name = (
         "0" if requested == "auto" and torch.cuda.is_available()
         else "cpu" if requested == "auto"
@@ -75,11 +80,13 @@ def resolve_device(requested: str) -> tuple[str, torch.device]:
 
 
 def load_models(args: argparse.Namespace, device_name: str, device: torch.device):
+    """Load the trained classifier and pose detector from their saved files."""
     if not args.classifier.is_file():
         raise FileNotFoundError(f"Trained classifier not found: {args.classifier}")
     if not args.pose_model.is_file():
         raise FileNotFoundError(f"YOLO pose model not found: {args.pose_model}")
 
+    # Check the class labels before loading weights to avoid mismatched predictions.
     checkpoint = torch.load(
         args.classifier, map_location="cpu", weights_only=True
     )
@@ -103,6 +110,7 @@ def load_models(args: argparse.Namespace, device_name: str, device: torch.device
 
 
 def selected_person(result, width: int, height: int) -> np.ndarray | None:
+    """Return normalized pose points for the largest person in an image."""
     if result.keypoints is None or result.boxes is None:
         return None
 
@@ -111,8 +119,10 @@ def selected_person(result, width: int, height: int) -> np.ndarray | None:
     if len(keypoints) == 0 or len(boxes) == 0:
         return None
 
+    # The largest box is treated as the person performing the exercise.
     box_areas = (boxes[:, 2] - boxes[:, 0]) * (boxes[:, 3] - boxes[:, 1])
     person_keypoints = keypoints[int(np.argmax(box_areas))].astype(np.float32)
+    # Normalize coordinates to the same 0..1 scale used during data preparation.
     person_keypoints[:, 0] /= width
     person_keypoints[:, 1] /= height
     return person_keypoints
@@ -123,12 +133,14 @@ def classify_sequence(
     classifier: ExerciseClassifier,
     device: torch.device,
 ) -> tuple[str, float]:
+    """Return the predicted exercise name and its estimated confidence."""
     if sequence.shape != (SEQUENCE_LENGTH, 17, 2):
         raise ValueError(
             f"Expected sequence shape {(SEQUENCE_LENGTH, 17, 2)}, "
             f"got {sequence.shape}."
         )
 
+    # Convert the 30-frame pose sequence into the classifier's expected tensor.
     inputs = torch.from_numpy(
         sequence.reshape(SEQUENCE_LENGTH, 34).astype(np.float32)
     ).unsqueeze(0).to(device)
@@ -143,6 +155,7 @@ def add_prediction_text(
     message: str,
     color: tuple[int, int, int],
 ) -> np.ndarray:
+    """Draw one readable message banner over an image."""
     output = frame.copy()
     cv2.rectangle(output, (0, 0), (output.shape[1], 48), (0, 0, 0), -1)
     cv2.putText(
@@ -159,6 +172,7 @@ def add_prediction_text(
 
 
 def console_quit_requested() -> bool:
+    """Check for Q in a Windows terminal without pausing video processing."""
     if msvcrt is None or not msvcrt.kbhit():
         return False
     return msvcrt.getwch() in {"q", "Q"}
@@ -173,6 +187,7 @@ def process_video(
     save_preview: Path | None,
     display: bool,
 ) -> int:
+    """Sample a saved video, classify its pose sequence, and show/save a preview."""
     if not video_path.is_file() or video_path.suffix.lower() not in VIDEO_SUFFIXES:
         raise FileNotFoundError(f"Video file not found or unsupported: {video_path}")
 
@@ -187,11 +202,13 @@ def process_video(
                 f"Video has {frame_count} frames; at least {SEQUENCE_LENGTH} are needed."
             )
 
+        # Use evenly spaced frames to represent the entire clip in fixed-size input.
         frame_indices = np.linspace(
             0, frame_count - 1, num=SEQUENCE_LENGTH, dtype=np.int64
         )
         sequence = []
         last_frame = None
+        # Detect one pose in each sampled frame and display progress as it runs.
         for position, frame_index in enumerate(frame_indices, start=1):
             capture.set(cv2.CAP_PROP_POS_FRAMES, int(frame_index))
             success, frame = capture.read()
@@ -222,6 +239,7 @@ def process_video(
                     print("Video test cancelled.")
                     return 1
 
+        # Classify only after every sampled frame has a usable person detection.
         prediction, confidence = classify_sequence(
             np.stack(sequence), classifier, device
         )
@@ -258,6 +276,7 @@ def process_camera(
     device_name: str,
     camera_index: int,
 ) -> int:
+    """Record a short camera sample, then classify it when SPACE is pressed again."""
     capture = cv2.VideoCapture(camera_index)
     if not capture.isOpened():
         capture.release()
@@ -282,6 +301,7 @@ def process_camera(
             height, width = frame.shape[:2]
             keypoints = selected_person(result, width, height)
             annotated = result.plot()
+            # Store only frames where the detector can see a person.
             if recording and keypoints is not None:
                 pose_frames.append(keypoints)
 
@@ -329,6 +349,7 @@ def process_camera(
                     pose_frames.clear()
                     continue
 
+                # Sample the recorded poses down to the classifier's fixed length.
                 indices = np.linspace(
                     0, len(pose_frames) - 1,
                     num=SEQUENCE_LENGTH,
@@ -347,6 +368,7 @@ def process_camera(
 
 
 def main() -> int:
+    """Load models and route the chosen source to camera or saved-video handling."""
     args = parse_args()
     source = args.source
     if source is None:

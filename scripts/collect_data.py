@@ -1,10 +1,12 @@
+"""Record short, labeled pose examples from the webcam for the classifier experiment."""
+
 import cv2
 import os
 import numpy as np
 from ultralytics import YOLO
 
 # -----------------------------
-# Configuration
+# Configuration: model file, output folder, and number of frames per example.
 # -----------------------------
 MODEL_PATH = "yolo26m-pose.pt"
 DATASET_PATH = "dataset"
@@ -12,12 +14,12 @@ DATASET_PATH = "dataset"
 SEQUENCE_LENGTH = 30
 
 # -----------------------------
-# Load YOLO Pose model
+# Load the pose detector once so it can be reused for each camera frame.
 # -----------------------------
 model = YOLO(MODEL_PATH)
 
 # -----------------------------
-# Choose exercise
+# Ask which label to save and create its output folder.
 # -----------------------------
 exercise = input("Enter exercise (pushup/squat): ").strip().lower()
 
@@ -29,7 +31,7 @@ save_path = os.path.join(DATASET_PATH, exercise)
 os.makedirs(save_path, exist_ok=True)
 
 # -----------------------------
-# Open webcam
+# Open the webcam and prepare a rolling buffer for one labeled example.
 # -----------------------------
 cap = cv2.VideoCapture(0)
 
@@ -45,41 +47,42 @@ print(f"Collecting data for: {exercise}")
 
 while cap.isOpened():
 
+    # Read the next camera image; stop cleanly if the webcam is unavailable.
     success, frame = cap.read()
 
     if not success:
         print("Cannot access webcam")
         break
 
-    # Run YOLO Pose on GPU
+    # Detect body joints in this frame, then draw the detection for the preview.
     results = model(frame, device=0, verbose=False)
 
     annotated_frame = results[0].plot()
 
     # --------------------------------
-    # Get pose keypoints
+    # Turn detected joint coordinates into one normalized frame of data.
     # --------------------------------
     if results[0].keypoints is not None and len(results[0].keypoints) > 0:
 
         keypoints = results[0].keypoints.xy[0].cpu().numpy()
 
-        # Normalize coordinates
+        # Normalize coordinates so examples from different camera sizes compare.
         h, w = frame.shape[:2]
 
         keypoints[:, 0] /= w
         keypoints[:, 1] /= h
 
-        # Flatten:
-        # 17 keypoints × 2 coordinates = 34 values
+        # Flatten 17 (x, y) points into 34 model input values.
         keypoints = keypoints.flatten()
 
+        # Keep only the most recent frames for the next saved sequence.
         sequence.append(keypoints)
 
         if len(sequence) > SEQUENCE_LENGTH:
             sequence.pop(0)
 
     # --------------------------------
-    # Display information
+    # Show the selected exercise and how much of the example is ready.
     # --------------------------------
     cv2.putText(
         annotated_frame,
@@ -106,7 +109,7 @@ while cap.isOpened():
     key = cv2.waitKey(1) & 0xFF
 
     # --------------------------------
-    # Save sequence
+    # S saves only a complete sequence, then starts collecting the next one.
     # --------------------------------
     if key == ord("s"):
 
@@ -127,9 +130,7 @@ while cap.isOpened():
         else:
             print("Not enough frames yet.")
 
-    # --------------------------------
-    # Quit
-    # --------------------------------
+    # Q exits the camera loop.
     if key == ord("q"):
         break
 

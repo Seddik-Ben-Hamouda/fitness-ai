@@ -1,3 +1,5 @@
+"""Train an experimental model that distinguishes squat from push-up videos."""
+
 import argparse
 from collections import Counter
 import json
@@ -10,14 +12,19 @@ from torch import nn
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+# Keep the labels and expected sequence format consistent with extraction/testing.
 CLASS_NAMES = ("push-up", "squat")
 SEQUENCE_SHAPE = (30, 17, 2)
+# Training examples teach the model; validation guides training; test checks it.
 SPLIT_RATIOS = (0.70, 0.15, 0.15)
 
 
 class ExerciseClassifier(nn.Module):
+    """Read a sequence of pose points and predict its exercise class."""
+
     def __init__(self, model_type: str, input_size: int, hidden_size: int, class_count: int):
         super().__init__()
+        # Choose the requested recurrent layer; both return a final sequence state.
         recurrent = nn.LSTM if model_type == "lstm" else nn.GRU
         self.recurrent = recurrent(input_size, hidden_size, batch_first=True)
         self.classifier = nn.Sequential(
@@ -26,12 +33,14 @@ class ExerciseClassifier(nn.Module):
         )
 
     def forward(self, sequence: torch.Tensor) -> torch.Tensor:
+        """Return one score per exercise class for each input video sequence."""
         _, hidden = self.recurrent(sequence)
         final_hidden = hidden[0] if isinstance(hidden, tuple) else hidden
         return self.classifier(final_hidden[-1])
 
 
 def parse_args() -> argparse.Namespace:
+    """Read paths and training settings from the command line."""
     parser = argparse.ArgumentParser(
         description="Train and evaluate an LSTM or GRU on extracted pose sequences."
     )
@@ -66,6 +75,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def set_seed(seed: int) -> None:
+    """Seed random number generators so a run is easier to reproduce."""
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
@@ -78,12 +88,14 @@ def set_seed(seed: int) -> None:
 def split_class_files(
     files: list[Path], seed: int
 ) -> tuple[list[Path], list[Path], list[Path]]:
+    """Shuffle one class and split its examples into train, validation, and test."""
     if len(files) < 3:
         raise ValueError(
             f"Need at least 3 sequences per class to create train/validation/test "
             f"splits; found {len(files)}."
         )
 
+    # Round down first, then assign leftover examples to the largest remainders.
     counts = [int(len(files) * ratio) for ratio in SPLIT_RATIOS]
     remainders = [
         len(files) * ratio - count
@@ -112,11 +124,13 @@ def split_class_files(
 
 
 def load_data(data_dir: Path, seed: int):
+    """Load both classes, validate each sequence, and return tensors plus file lists."""
     partitions: dict[str, list[tuple[Path, int]]] = {
         "train": [],
         "validation": [],
         "test": [],
     }
+    # Split each class separately so every partition contains both exercise labels.
     for label, class_name in enumerate(CLASS_NAMES):
         class_dir = data_dir / class_name
         if not class_dir.is_dir():
@@ -142,6 +156,7 @@ def load_data(data_dir: Path, seed: int):
         labels = []
         paths = []
         for path, label in examples:
+            # Reject malformed or unsafe inputs before they reach model training.
             sequence = np.load(path, allow_pickle=False)
             if sequence.shape != SEQUENCE_SHAPE:
                 raise ValueError(
@@ -152,6 +167,7 @@ def load_data(data_dir: Path, seed: int):
             ).all():
                 raise ValueError(f"{path} contains non-numeric or non-finite values.")
 
+            # Flatten each of the 17 (x, y) points into 34 values per frame.
             sequences.append(sequence.reshape(SEQUENCE_SHAPE[0], -1))
             labels.append(label)
             paths.append(path.relative_to(data_dir).as_posix())
@@ -172,6 +188,7 @@ def evaluate(
     labels: torch.Tensor,
     device: torch.device,
 ) -> tuple[float, np.ndarray]:
+    """Measure loss and predicted labels without updating model weights."""
     model.eval()
     with torch.no_grad():
         logits = model(features.to(device))
@@ -183,6 +200,7 @@ def evaluate(
 def classification_metrics(
     truth: np.ndarray, predictions: np.ndarray
 ) -> dict[str, object]:
+    """Summarize test predictions, including per-class recall and accuracy."""
     class_count = len(CLASS_NAMES)
     confusion = np.zeros((class_count, class_count), dtype=np.int64)
     for actual, predicted in zip(truth, predictions):
@@ -211,6 +229,7 @@ def classification_metrics(
 
 
 def main() -> int:
+    """Train, keep the best validation checkpoint, test it, and save reports."""
     args = parse_args()
     if args.epochs < 1 or args.batch_size < 1 or args.patience < 1:
         raise ValueError("epochs, batch-size, and patience must be positive.")
@@ -229,6 +248,7 @@ def main() -> int:
     train_features, train_labels = data["train"]
     validation_features, validation_labels = data["validation"]
     test_features, test_labels = data["test"]
+    # Weight classes inversely by their training frequency to reduce imbalance.
     class_counts = Counter(train_labels.tolist())
     weights = torch.tensor(
         [
@@ -245,10 +265,12 @@ def main() -> int:
     loss_function = nn.CrossEntropyLoss(weight=weights)
     optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
 
+    # Early stopping keeps the checkpoint with the best validation performance.
     best_validation_loss = float("inf")
     best_state = None
     epochs_without_improvement = 0
     for epoch in range(1, args.epochs + 1):
+        # Shuffle the training examples each epoch and learn in small batches.
         model.train()
         permutation = torch.randperm(len(train_labels))
         for start in range(0, len(permutation), args.batch_size):
@@ -275,6 +297,7 @@ def main() -> int:
             f"accuracy={validation_accuracy:.3f}"
         )
 
+        # Keep a copy of the best model; stop if validation no longer improves.
         if validation_loss < best_validation_loss:
             best_validation_loss = validation_loss
             best_state = {
@@ -293,6 +316,7 @@ def main() -> int:
     model.load_state_dict(best_state)
     model.to(device)
 
+    # The test set is held aside until the model has finished training.
     _, test_predictions = evaluate(
         model, loss_function, test_features, test_labels, device
     )
@@ -323,6 +347,7 @@ def main() -> int:
     model_path = args.output_dir / "exercise_classifier.pt"
     report_path = args.output_dir / "exercise_classifier_report.json"
     manifest_path = args.output_dir / "exercise_classifier_splits.json"
+    # Save the model, a human-readable score report, and exact file split lists.
     torch.save(
         {
             "model_type": args.model,

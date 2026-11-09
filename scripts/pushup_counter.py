@@ -1,3 +1,5 @@
+"""Count push-ups by following shoulder, elbow, and wrist movement in video."""
+
 import argparse
 from collections import deque
 from pathlib import Path
@@ -13,10 +15,12 @@ from squat_counter import VIDEO_SUFFIXES, console_quit_requested, resolve_device
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+# YOLO's 17-point pose order: left arm and right arm (shoulder, elbow, wrist).
 ELBOW_SIDES = ((5, 7, 9), (6, 8, 10))
 
 
 def parse_args() -> argparse.Namespace:
+    """Read the video source, angle thresholds, and optional output settings."""
     parser = argparse.ArgumentParser(
         description="Count completed push-ups using YOLO pose keypoints."
     )
@@ -75,6 +79,7 @@ def parse_args() -> argparse.Namespace:
 def elbow_angle_degrees(
     keypoints: np.ndarray, side: tuple[int, int, int]
 ) -> float:
+    """Calculate the shoulder-elbow-wrist angle in degrees."""
     shoulder_index, elbow_index, wrist_index = side
     shoulder = keypoints[shoulder_index]
     elbow = keypoints[elbow_index]
@@ -84,6 +89,7 @@ def elbow_angle_degrees(
     denominator = np.linalg.norm(upper_arm) * np.linalg.norm(forearm)
     if denominator <= 1e-6:
         raise ValueError("Detected arm landmarks do not define a usable elbow angle.")
+    # Clipping prevents tiny floating-point errors from breaking arccos.
     cosine = np.clip(np.dot(upper_arm, forearm) / denominator, -1.0, 1.0)
     return float(np.degrees(np.arccos(cosine)))
 
@@ -93,6 +99,7 @@ def choose_arm(
     confidences: np.ndarray | None,
     minimum_confidence: float,
 ) -> tuple[int, int, int] | None:
+    """Choose the visible arm whose three joint-confidence scores are strongest."""
     best_side = None
     best_score = -1.0
     for side in ELBOW_SIDES:
@@ -112,6 +119,8 @@ def choose_arm(
 
 
 class PushupRepCounter:
+    """Count only a full top-to-bottom-to-top push-up movement."""
+
     def __init__(self, bottom_angle: float, top_angle: float) -> None:
         if not 0 < bottom_angle < top_angle <= 180:
             raise ValueError(
@@ -123,6 +132,7 @@ class PushupRepCounter:
         self.state = "waiting"
 
     def update(self, angle: float) -> tuple[int, str]:
+        """Advance the movement state and return the count and on-screen prompt."""
         if self.state == "waiting":
             if angle >= self.top_angle:
                 self.state = "top"
@@ -160,6 +170,7 @@ def annotate_frame(
     angle: float | None,
     status: str,
 ) -> np.ndarray:
+    """Add the pose, count, measured angle, and guidance to one video frame."""
     annotated = pose_result.plot() if pose_result is not None else frame.copy()
     cv2.rectangle(annotated, (0, 0), (annotated.shape[1], 112), (0, 0, 0), -1)
     angle_text = (
@@ -199,6 +210,8 @@ def annotate_frame(
 
 
 def run_counter(args: argparse.Namespace, source: str) -> int:
+    """Open the selected camera/video, count reps, then close resources safely."""
+    # Validate settings before loading a model or opening a camera.
     if not args.model.is_file():
         raise FileNotFoundError(f"YOLO pose model not found: {args.model}")
     if not 0 < args.keypoint_confidence <= 1:
@@ -208,6 +221,7 @@ def run_counter(args: argparse.Namespace, source: str) -> int:
 
     device_name, _ = resolve_device(args.device)
     pose_model = YOLO(str(args.model))
+    # "camera", "webcam", and a numeric camera index select a live camera.
     camera_source = source.lower() in {"camera", "webcam"} or source.isdigit()
     if args.headless and camera_source:
         raise ValueError("--headless can only be used with a video file.")
@@ -246,6 +260,7 @@ def run_counter(args: argparse.Namespace, source: str) -> int:
             mqtt_publisher = MqttRepPublisher("push-up")
 
         while True:
+            # Read a frame, estimate pose, and measure the best visible arm.
             success, frame = capture.read()
             if not success:
                 if camera_source:
@@ -266,6 +281,7 @@ def run_counter(args: argparse.Namespace, source: str) -> int:
                     else None
                 )
                 if len(all_keypoints) and len(all_boxes):
+                    # In a busy frame, track the largest detected person.
                     areas = (all_boxes[:, 2] - all_boxes[:, 0]) * (
                         all_boxes[:, 3] - all_boxes[:, 1]
                     )
@@ -284,10 +300,12 @@ def run_counter(args: argparse.Namespace, source: str) -> int:
                         angle = elbow_angle_degrees(
                             all_keypoints[person_index], arm
                         )
+                        # A short median filter smooths noisy angle changes.
                         angle_history.append(angle)
                         smoothed_angle = float(np.median(angle_history))
                         previous_repetitions = counter.repetitions
                         _, status = counter.update(smoothed_angle)
+                        # Publish only when this frame completes a new repetition.
                         if (
                             mqtt_publisher is not None
                             and counter.repetitions > previous_repetitions
@@ -307,6 +325,7 @@ def run_counter(args: argparse.Namespace, source: str) -> int:
                 angle_history.clear()
                 status = "No person detected — show your upper body and arms"
 
+            # Draw the latest count and status, then optionally show the window.
             output = annotate_frame(
                 frame, pose_result, counter.repetitions, angle, status
             )
@@ -321,6 +340,7 @@ def run_counter(args: argparse.Namespace, source: str) -> int:
                 stopped_by_user = True
                 break
 
+        # Leave the last result visible briefly after a saved video ends.
         if (
             not camera_source
             and not args.headless
@@ -349,6 +369,7 @@ def run_counter(args: argparse.Namespace, source: str) -> int:
                 if key in (ord("q"), ord("Q"), 27) or console_quit_requested():
                     break
     finally:
+        # Release camera/window/network resources even if processing fails.
         capture.release()
         cv2.destroyAllWindows()
         if mqtt_publisher is not None:
@@ -367,6 +388,7 @@ def run_counter(args: argparse.Namespace, source: str) -> int:
 
 
 def main() -> int:
+    """Choose a source interactively when one was not supplied on the command line."""
     args = parse_args()
     source = args.source
     if source is None:

@@ -1,3 +1,5 @@
+"""Convert labeled exercise videos into fixed-length body-joint sequences."""
+
 import argparse
 from pathlib import Path
 
@@ -19,6 +21,7 @@ def extract_sequence(
     device: str,
     sequence_length: int,
 ) -> tuple[np.ndarray | None, str | None]:
+    """Sample a video and return one normalized pose sequence or a skip reason."""
     capture = cv2.VideoCapture(str(video_path))
     try:
         if not capture.isOpened():
@@ -30,6 +33,7 @@ def extract_sequence(
         if frame_count < sequence_length or width <= 0 or height <= 0:
             return None, f"video has invalid dimensions or fewer than {sequence_length} frames"
 
+        # Sample evenly across the whole video rather than using adjacent frames.
         frame_indices = np.linspace(
             0, frame_count - 1, num=sequence_length, dtype=np.int64
         )
@@ -50,8 +54,10 @@ def extract_sequence(
             if len(keypoints) == 0 or len(boxes) == 0:
                 return None, f"no person detected at frame {frame_index}"
 
+            # Use the largest detected person as the exercise subject.
             areas = (boxes[:, 2] - boxes[:, 0]) * (boxes[:, 3] - boxes[:, 1])
             person_keypoints = keypoints[int(np.argmax(areas))].astype(np.float32)
+            # Scale x/y to 0..1 so image resolution does not affect the data.
             person_keypoints[:, 0] /= width
             person_keypoints[:, 1] /= height
             sequence.append(person_keypoints)
@@ -62,6 +68,7 @@ def extract_sequence(
 
 
 def save_sequence(destination: Path, sequence: np.ndarray) -> None:
+    """Write a sequence through a temporary file to avoid partial output."""
     destination.parent.mkdir(parents=True, exist_ok=True)
     temporary_path = destination.with_name(f"{destination.stem}.tmp.npy")
     try:
@@ -74,6 +81,7 @@ def save_sequence(destination: Path, sequence: np.ndarray) -> None:
 
 
 def parse_args() -> argparse.Namespace:
+    """Read optional input, output, model, and processing-device settings."""
     parser = argparse.ArgumentParser(
         description="Extract fixed-length YOLO pose sequences from exercise videos."
     )
@@ -104,10 +112,12 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> int:
+    """Find labeled videos, extract sequences, and report any skipped inputs."""
     args = parse_args()
     if not args.model.is_file():
         raise FileNotFoundError(f"YOLO model weights not found: {args.model}")
 
+    # "auto" uses the first CUDA GPU when available and otherwise the CPU.
     device = (
         "0" if args.device == "auto" and torch.cuda.is_available()
         else "cpu" if args.device == "auto"
@@ -117,6 +127,7 @@ def main() -> int:
     print(f"Using device: {device}")
     print(f"Saving sequences under: {args.output_dir}")
 
+    # Process the same two labels used by the training and test scripts.
     failures = []
     for class_name in CLASS_NAMES:
         class_dir = args.input_dir / class_name
@@ -129,6 +140,7 @@ def main() -> int:
             if path.is_file() and path.suffix.lower() in VIDEO_SUFFIXES
         )
         for video_path in videos:
+            # Keep each output beside its matching class and relative subfolder.
             relative_path = video_path.relative_to(class_dir).with_suffix(".npy")
             destination = args.output_dir / class_name / relative_path
             if destination.is_file():

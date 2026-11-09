@@ -23,8 +23,13 @@ Thumbs.db
 *.h5
 *.keras
 
-# Local datasets, downloaded archives, and generated model reports
-/dataset/
+# Local datasets and generated model reports.
+# Only the two exercise video sets used by this project are shared.
+/dataset/*
+!/dataset/push-up/
+!/dataset/push-up/**
+!/dataset/squat/
+!/dataset/squat/**
 /models/
 
 # Logs
@@ -33,3 +38,6 @@ Thumbs.db
 # Temporary files
 temp/
 tmp/
+
+Seddik_Ben_Hamouda.tex
+captures/

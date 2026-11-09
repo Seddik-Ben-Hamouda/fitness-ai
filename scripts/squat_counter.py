@@ -1,3 +1,5 @@
+"""Count squats by following hip, knee, and ankle movement in video."""
+
 import argparse
 from collections import deque
 from pathlib import Path
@@ -14,8 +16,11 @@ from mqtt_publisher import MqttRepPublisher
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 VIDEO_SUFFIXES = {".mp4", ".mov", ".avi", ".mkv"}
+# YOLO pose indices for a shoulder-to-ankle side of the body.
 SKELETON_PAIRS = ((5, 11), (11, 13), (13, 15))
 
+# Windows needs this helper to detect Q typed into the terminal while a window
+# is open; other platforms simply leave terminal-key detection unavailable.
 if sys.platform == "win32":
     import msvcrt
 else:
@@ -23,6 +28,7 @@ else:
 
 
 def parse_args() -> argparse.Namespace:
+    """Read the source, squat angle limits, and optional run settings."""
     parser = argparse.ArgumentParser(
         description="Count completed squats using YOLO pose keypoints."
     )
@@ -79,6 +85,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def resolve_device(requested: str) -> tuple[str, torch.device]:
+    """Resolve auto/CPU/CUDA selection and reject unavailable CUDA requests."""
     device_name = (
         "0" if requested == "auto" and torch.cuda.is_available()
         else "cpu" if requested == "auto"
@@ -93,6 +100,7 @@ def resolve_device(requested: str) -> tuple[str, torch.device]:
 
 
 def console_quit_requested() -> bool:
+    """Return whether Q was pressed in a Windows terminal without blocking."""
     if msvcrt is None or not msvcrt.kbhit():
         return False
     return msvcrt.getwch() in {"q", "Q"}
@@ -103,6 +111,7 @@ def choose_side(
     confidences: np.ndarray | None,
     minimum_confidence: float,
 ) -> tuple[np.ndarray, tuple[int, int, int, int]] | None:
+    """Choose a side with visible shoulder, hip, knee, and ankle landmarks."""
     sides = ((5, 11, 13, 15), (6, 12, 14, 16))
     best_side = None
     best_score = -1.0
@@ -129,6 +138,7 @@ def choose_side(
 def knee_angle_degrees(
     keypoints: np.ndarray, side: tuple[int, int, int, int]
 ) -> float:
+    """Measure the angle at the knee formed by hip, knee, and ankle."""
     _, hip_index, knee_index, ankle_index = side
     hip = keypoints[hip_index]
     knee = keypoints[knee_index]
@@ -138,11 +148,14 @@ def knee_angle_degrees(
     denominator = np.linalg.norm(upper_leg) * np.linalg.norm(lower_leg)
     if denominator <= 1e-6:
         raise ValueError("Detected leg landmarks do not define a usable knee angle.")
+    # Clamp round-off values to the valid input range for arccos.
     cosine = np.clip(np.dot(upper_leg, lower_leg) / denominator, -1.0, 1.0)
     return float(np.degrees(np.arccos(cosine)))
 
 
 class SquatRepCounter:
+    """Count a squat only after the user lowers deeply and stands back up."""
+
     def __init__(self, bottom_angle: float, standing_angle: float) -> None:
         if not 0 < bottom_angle < standing_angle <= 180:
             raise ValueError(
@@ -154,6 +167,7 @@ class SquatRepCounter:
         self.state = "waiting"
 
     def update(self, angle: float) -> tuple[int, str]:
+        """Move between squat stages and return the count and current prompt."""
         if self.state == "waiting":
             if angle >= self.standing_angle:
                 self.state = "standing"
@@ -191,6 +205,7 @@ def annotate_frame(
     angle: float | None,
     status: str,
 ) -> np.ndarray:
+    """Add the detected skeleton, count, knee angle, and prompt to a frame."""
     annotated = pose_result.plot() if pose_result is not None else frame.copy()
     cv2.rectangle(annotated, (0, 0), (annotated.shape[1], 112), (0, 0, 0), -1)
     angle_text = f"Knee angle: {angle:.0f} deg" if angle is not None else "Knee angle: --"
@@ -228,6 +243,8 @@ def annotate_frame(
 
 
 def run_counter(args: argparse.Namespace, source: str) -> int:
+    """Open the chosen source, count reps, and clean up resources at the end."""
+    # Fail early for missing model files or invalid command-line values.
     if not args.model.is_file():
         raise FileNotFoundError(f"YOLO pose model not found: {args.model}")
     if not 0 < args.keypoint_confidence <= 1:
@@ -237,6 +254,7 @@ def run_counter(args: argparse.Namespace, source: str) -> int:
 
     device_name, _ = resolve_device(args.device)
     pose_model = YOLO(str(args.model))
+    # A word or number chooses a camera; any other value is treated as a video path.
     camera_source = source.lower() in {"camera", "webcam"} or source.isdigit()
     if args.headless and camera_source:
         raise ValueError("--headless can only be used with a video file.")
@@ -275,6 +293,7 @@ def run_counter(args: argparse.Namespace, source: str) -> int:
             mqtt_publisher = MqttRepPublisher("squat")
 
         while True:
+            # Read a frame and find the pose before measuring a knee angle.
             success, frame = capture.read()
             if not success:
                 if camera_source:
@@ -297,6 +316,7 @@ def run_counter(args: argparse.Namespace, source: str) -> int:
                     else None
                 )
                 if len(all_keypoints) and len(all_boxes):
+                    # Select the largest person to avoid counting a bystander.
                     areas = (all_boxes[:, 2] - all_boxes[:, 0]) * (
                         all_boxes[:, 3] - all_boxes[:, 1]
                     )
@@ -314,11 +334,14 @@ def run_counter(args: argparse.Namespace, source: str) -> int:
                     if selected is not None:
                         points, side = selected
                         angle = knee_angle_degrees(points, side)
+                        # Smooth the measurement so single-frame noise is less likely
+                        # to change the movement state.
                         angle_history.append(angle)
                         smoothed_angle = float(np.median(angle_history))
                         valid_angle_frames += 1
                         previous_repetitions = counter.repetitions
                         _, status = counter.update(smoothed_angle)
+                        # Send an MQTT update only after a new rep has been counted.
                         if (
                             mqtt_publisher is not None
                             and counter.repetitions > previous_repetitions
@@ -337,6 +360,7 @@ def run_counter(args: argparse.Namespace, source: str) -> int:
                 angle_history.clear()
                 status = "No person detected — show your full body"
 
+            # Overlay feedback and display the frame unless headless mode was chosen.
             output = annotate_frame(
                 frame, pose_result, counter.repetitions, angle, status
             )
@@ -351,6 +375,7 @@ def run_counter(args: argparse.Namespace, source: str) -> int:
                 stopped_by_user = True
                 break
 
+        # Keep the final video result on screen for the requested short delay.
         if (
             not camera_source
             and not args.headless
@@ -380,6 +405,7 @@ def run_counter(args: argparse.Namespace, source: str) -> int:
                     break
 
     finally:
+        # Always release camera, display, and optional MQTT resources.
         capture.release()
         cv2.destroyAllWindows()
         if mqtt_publisher is not None:
@@ -395,6 +421,7 @@ def run_counter(args: argparse.Namespace, source: str) -> int:
 
 
 def main() -> int:
+    """Ask for a camera or video when none was provided as an argument."""
     args = parse_args()
     source = args.source
     if source is None:

@@ -1,3 +1,5 @@
+"""Publish completed repetition counts to an MQTT broker when enabled."""
+
 import json
 import os
 import threading
@@ -16,7 +18,10 @@ PUBLISH_TIMEOUT_SECONDS = 10
 
 
 class MqttRepPublisher:
+    """Manage a secure MQTT connection and publish exercise count updates."""
+
     def __init__(self, exercise: str) -> None:
+        # Load local credentials without putting secrets in source code.
         load_dotenv(PROJECT_ROOT / ".env")
 
         broker = os.getenv("MQTT_BROKER")
@@ -37,6 +42,7 @@ class MqttRepPublisher:
                 f"MQTT CA certificate not found: {ca_certificate}"
             )
 
+        # Keep each exercise's count on its own message topic.
         self.topic = f"fitness/{exercise}/reps"
         self.exercise = exercise
         self.client = mqtt.Client(
@@ -46,6 +52,8 @@ class MqttRepPublisher:
         self.client.username_pw_set(username, password)
         self.client.tls_set(ca_certs=str(ca_certificate))
 
+        # The network callback runs in the MQTT worker thread; the event lets
+        # startup wait for its result before reporting a successful connection.
         connected = threading.Event()
         connection_error: list[str] = []
 
@@ -71,6 +79,7 @@ class MqttRepPublisher:
         print(f"Connected to MQTT broker; publishing to {self.topic}")
 
     def publish_repetitions(self, count: int) -> None:
+        """Send the current count and UTC time, and report delivery failures."""
         message = json.dumps(
             {
                 "exercise": self.exercise,
@@ -90,5 +99,6 @@ class MqttRepPublisher:
         print(f"Published {message} to {self.topic}")
 
     def close(self) -> None:
+        """Disconnect and stop the MQTT background network loop."""
         self.client.disconnect()
         self.client.loop_stop()
